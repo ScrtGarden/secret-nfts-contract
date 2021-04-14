@@ -26,4 +26,8 @@ pub struct Metadata {
     pub description: Option<String>,
     /// optional uri to contain an image, additional data fields, etc...
     pub image: Option<String>,
+    /// optional attributes
+    pub attributes: Option<String>,
+    /// optional content
+    pub content: Option<String>,
 }
