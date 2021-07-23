@@ -1,6 +1,6 @@
 use std::any::type_name;
 
-use cosmwasm_std::{Api, CanonicalAddr, ReadonlyStorage, StdError, StdResult, Storage};
+use cosmwasm_std::{Api, BlockInfo, CanonicalAddr, ReadonlyStorage, StdError, StdResult, Storage};
 use cosmwasm_storage::{PrefixedStorage, ReadonlyPrefixedStorage};
 
 use secret_toolkit::{
@@ -21,8 +21,8 @@ pub const BLOCK_KEY: &[u8] = b"blockinfo";
 pub const MINTERS_KEY: &[u8] = b"minters";
 /// storage key for prng seed
 pub const PRNG_SEED_KEY: &[u8] = b"prngseed";
-/// storage key for list of tokens
-pub const TOKENS_KEY: &[u8] = b"tokens";
+/// prefix for storage of the token ids
+pub const PREFIX_TOKENS: &[u8] = b"tokens";
 /// prefix for storage that maps ids to indices
 pub const PREFIX_MAP_TO_INDEX: &[u8] = b"map2idx";
 /// prefix for storage that maps indices to ids
@@ -117,7 +117,9 @@ pub struct StoredTx {
     /// tx id
     pub tx_id: u64,
     /// the block containing this tx
-    pub blockheight: u64,
+    pub block_height: u64,
+    /// the time (in seconds since 01/01/1970) of the block containing this tx
+    pub block_time: u64,
     /// token id
     pub token_id: String,
     /// tx type and specifics
@@ -168,7 +170,8 @@ impl StoredTx {
         };
         let tx = Tx {
             tx_id: self.tx_id,
-            blockheight: self.blockheight,
+            block_height: self.block_height,
+            block_time: self.block_time,
             token_id: self.token_id,
             action,
             memo: self.memo,
@@ -184,7 +187,7 @@ impl StoredTx {
 ///
 /// * `storage` - a mutable reference to the storage this item should go to
 /// * `config` - a mutable reference to the contract Config
-/// * `blockheight` - the block containing this tx
+/// * `block` - a reference to the current BlockInfo
 /// * `token_id` - token id being minted
 /// * `from` - the previouis owner's address
 /// * `sender` - optional address that sent the token
@@ -194,7 +197,7 @@ impl StoredTx {
 pub fn store_transfer<S: Storage>(
     storage: &mut S,
     config: &mut Config,
-    blockheight: u64,
+    block: &BlockInfo,
     token_id: String,
     from: CanonicalAddr,
     sender: Option<CanonicalAddr>,
@@ -208,12 +211,14 @@ pub fn store_transfer<S: Storage>(
     };
     let tx = StoredTx {
         tx_id: config.tx_cnt,
-        blockheight,
+        block_height: block.height,
+        block_time: block.time,
         token_id,
         action,
         memo,
     };
-    append_tx(storage, &tx)?;
+    let mut tx_store = PrefixedStorage::new(PREFIX_TXS, storage);
+    json_save(&mut tx_store, &config.tx_cnt.to_le_bytes(), &tx)?;
     if let StoredTxAction::Transfer {
         from,
         sender,
@@ -238,7 +243,7 @@ pub fn store_transfer<S: Storage>(
 ///
 /// * `storage` - a mutable reference to the storage this item should go to
 /// * `config` - a mutable reference to the contract Config
-/// * `blockheight` - the block containing this tx
+/// * `block` - a reference to the current BlockInfo
 /// * `token_id` - token id being minted
 /// * `minter` - the minter's address
 /// * `recipient` - the recipient's address
@@ -246,7 +251,7 @@ pub fn store_transfer<S: Storage>(
 pub fn store_mint<S: Storage>(
     storage: &mut S,
     config: &mut Config,
-    blockheight: u64,
+    block: &BlockInfo,
     token_id: String,
     minter: CanonicalAddr,
     recipient: CanonicalAddr,
@@ -255,12 +260,14 @@ pub fn store_mint<S: Storage>(
     let action = StoredTxAction::Mint { minter, recipient };
     let tx = StoredTx {
         tx_id: config.tx_cnt,
-        blockheight,
+        block_height: block.height,
+        block_time: block.time,
         token_id,
         action,
         memo,
     };
-    append_tx(storage, &tx)?;
+    let mut tx_store = PrefixedStorage::new(PREFIX_TXS, storage);
+    json_save(&mut tx_store, &config.tx_cnt.to_le_bytes(), &tx)?;
     if let StoredTxAction::Mint { minter, recipient } = tx.action {
         append_tx_for_addr(storage, config.tx_cnt, &recipient)?;
         if recipient != minter {
@@ -277,7 +284,7 @@ pub fn store_mint<S: Storage>(
 ///
 /// * `storage` - a mutable reference to the storage this item should go to
 /// * `config` - a mutable reference to the contract Config
-/// * `blockheight` - the block containing this tx
+/// * `block` - a reference to the current BlockInfo
 /// * `token_id` - token id being minted
 /// * `owner` - the previous owner's address
 /// * `burner` - optional address that burnt the token
@@ -285,7 +292,7 @@ pub fn store_mint<S: Storage>(
 pub fn store_burn<S: Storage>(
     storage: &mut S,
     config: &mut Config,
-    blockheight: u64,
+    block: &BlockInfo,
     token_id: String,
     owner: CanonicalAddr,
     burner: Option<CanonicalAddr>,
@@ -294,12 +301,14 @@ pub fn store_burn<S: Storage>(
     let action = StoredTxAction::Burn { owner, burner };
     let tx = StoredTx {
         tx_id: config.tx_cnt,
-        blockheight,
+        block_height: block.height,
+        block_time: block.time,
         token_id,
         action,
         memo,
     };
-    append_tx(storage, &tx)?;
+    let mut tx_store = PrefixedStorage::new(PREFIX_TXS, storage);
+    json_save(&mut tx_store, &config.tx_cnt.to_le_bytes(), &tx)?;
     if let StoredTxAction::Burn { owner, burner } = tx.action {
         append_tx_for_addr(storage, config.tx_cnt, &owner)?;
         if let Some(bnr) = burner.as_ref() {
@@ -308,18 +317,6 @@ pub fn store_burn<S: Storage>(
     }
     config.tx_cnt += 1;
     Ok(())
-}
-
-/// Returns StdResult<()> after saving tx
-///
-/// # Arguments
-///
-/// * `storage` - a mutable reference to the storage this item should go to
-/// * `tx` - a reference to the tx to store
-fn append_tx<S: Storage>(storage: &mut S, tx: &StoredTx) -> StdResult<()> {
-    let mut store = PrefixedStorage::new(PREFIX_TXS, storage);
-    let mut store = AppendStoreMut::attach_or_create_with_serialization(&mut store, Json)?;
-    store.push(tx)
 }
 
 /// Returns StdResult<()> after saving tx id
@@ -339,7 +336,7 @@ fn append_tx_for_addr<S: Storage>(
     store.push(&tx_id)
 }
 
-/// Returns StdResult<Vec<Tx>> of the txs to display
+/// Returns StdResult<(Vec<Tx>, u64)> of the txs to display and the total count of txs
 ///
 /// # Arguments
 ///
@@ -354,21 +351,20 @@ pub fn get_txs<A: Api, S: ReadonlyStorage>(
     address: &CanonicalAddr,
     page: u32,
     page_size: u32,
-) -> StdResult<Vec<Tx>> {
+) -> StdResult<(Vec<Tx>, u64)> {
     let id_store =
         ReadonlyPrefixedStorage::multilevel(&[PREFIX_TX_IDS, address.as_slice()], storage);
 
     // Try to access the storage of tx ids for the account.
     // If it doesn't exist yet, return an empty list of txs.
-    let id_store = if let Some(result) = AppendStore::<u32, _>::attach(&id_store) {
+    let id_store = if let Some(result) = AppendStore::<u64, _>::attach(&id_store) {
         result?
     } else {
-        return Ok(vec![]);
+        return Ok((vec![], 0));
     };
-    // try to access tx storage
+    let count = id_store.len() as u64;
+    // access tx storage
     let tx_store = ReadonlyPrefixedStorage::new(PREFIX_TXS, storage);
-    let tx_store = AppendStore::<StoredTx, _, _>::attach_with_serialization(&tx_store, Json)
-        .ok_or_else(|| StdError::generic_err("Unable to retrieve tx data"))??;
     // Take `page_size` txs starting from the latest tx, potentially skipping `page * page_size`
     // txs from the start.
     let txs: StdResult<Vec<Tx>> = id_store
@@ -377,12 +373,15 @@ pub fn get_txs<A: Api, S: ReadonlyStorage>(
         .skip((page * page_size) as usize)
         .take(page_size as usize)
         .map(|id| {
-            id.map(|id| tx_store.get_at(id).and_then(|tx| tx.into_humanized(api)))
-                .and_then(|x| x)
+            id.map(|id| {
+                json_load(&tx_store, &id.to_le_bytes())
+                    .and_then(|tx: StoredTx| tx.into_humanized(api))
+            })
+            .and_then(|x| x)
         })
         .collect();
 
-    txs
+    txs.map(|t| (t, count))
 }
 
 /// permission to view token info/transfer tokens
