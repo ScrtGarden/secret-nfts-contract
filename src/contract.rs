@@ -404,6 +404,13 @@ pub fn mint<S: Storage, A: Api, Q: Querier>(
 ) -> HandleResult {
     check_status(config.status, priority)?;
     let sender_raw = deps.api.canonical_address(&env.message.sender)?;
+    let minters: Vec<CanonicalAddr> =
+        may_load(&deps.storage, MINTERS_KEY)?.unwrap_or_else(Vec::new);
+    if !minters.contains(&sender_raw) {
+        return Err(StdError::generic_err(
+            "Only designated minters are allowed to mint",
+        ));
+    }
     let mut mints = vec![Mint {
         token_id,
         owner,
@@ -442,6 +449,13 @@ pub fn batch_mint<S: Storage, A: Api, Q: Querier>(
 ) -> HandleResult {
     check_status(config.status, priority)?;
     let sender_raw = deps.api.canonical_address(&env.message.sender)?;
+    let minters: Vec<CanonicalAddr> =
+        may_load(&deps.storage, MINTERS_KEY)?.unwrap_or_else(Vec::new);
+    if !minters.contains(&sender_raw) {
+        return Err(StdError::generic_err(
+            "Only designated minters are allowed to mint",
+        ));
+    }
     let minted = mint_list(deps, &env.block, config, &sender_raw, mints)?;
     Ok(HandleResponse {
         messages: vec![],
@@ -1660,11 +1674,15 @@ pub fn query_nft_info<S: ReadonlyStorage>(storage: &S, token_id: &str) -> QueryR
             name: None,
             description: None,
             image: None,
+            properties: None,
+            attributes: None,
         });
         return to_binary(&QueryAnswer::NftInfo {
             name: meta.name,
             description: meta.description,
             image: meta.image,
+            properties: meta.properties,
+            attributes: meta.attributes,
         });
     }
     // token id wasn't found
@@ -1680,6 +1698,8 @@ pub fn query_nft_info<S: ReadonlyStorage>(storage: &S, token_id: &str) -> QueryR
         name: None,
         description: None,
         image: None,
+        properties: None,
+        attributes: None,
     })
 }
 
@@ -1724,11 +1744,15 @@ pub fn query_private_meta<S: Storage, A: Api, Q: Querier>(
         name: None,
         description: None,
         image: None,
+        properties: None,
+        attributes: None,
     });
     to_binary(&QueryAnswer::PrivateMetadata {
         name: meta.name,
         description: meta.description,
         image: meta.image,
+        properties: meta.properties,
+        attributes: meta.attributes,
     })
 }
 

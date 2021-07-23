@@ -759,11 +759,15 @@ pub enum QueryAnswer {
         name: Option<String>,
         description: Option<String>,
         image: Option<String>,
+        properties: Option<String>,
+        attributes: Option<String>,
     },
     PrivateMetadata {
         name: Option<String>,
         description: Option<String>,
         image: Option<String>,
+        properties: Option<String>,
+        attributes: Option<String>,
     },
     AllNftInfo {
         access: Cw721OwnerOfResponse,
